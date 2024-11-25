@@ -198,11 +198,12 @@ class ImageToVideoConverter:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Image to Video Converter")
-        self.root.geometry("600x450")
+        self.root.geometry("600x700")
         self.root.configure(bg="#1a1a1a")
         
         # Variables
-        self.image_files = []
+        self.media_files = []
+        self.file_types = []
         self.fps = tk.StringVar(value="30")
         self.status_text = tk.StringVar(value="No files selected")
         self.use_gpu = tk.BooleanVar(value=True)
@@ -210,6 +211,7 @@ class ImageToVideoConverter:
         self.resolution = tk.StringVar(value="")   # Empty means original size
         self.target_size = tk.StringVar(value="")  # Empty means no target size
         self.size_unit = tk.StringVar(value="MB")  # MB or KB
+        self.listbox = None
         
         # Add timing variables
         self.last_frame = 0
@@ -236,8 +238,8 @@ class ImageToVideoConverter:
         # File selection
         select_btn = ModernButton(
             main_frame,
-            text="Select Images",
-            command=self.select_images
+            text="Select Media Files",
+            command=self.select_media
         )
         select_btn.pack(pady=10)
         
@@ -254,6 +256,47 @@ class ImageToVideoConverter:
             font=("Segoe UI", 10)
         )
         status_label.pack()
+        
+        # Media list frame
+        list_frame = tk.Frame(main_frame, bg="#2c3e50", padx=10, pady=10)
+        list_frame.pack(fill="both", expand=True, pady=10)
+        
+        # Scrollbar
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Listbox
+        self.listbox = tk.Listbox(
+            list_frame,
+            bg="#2c3e50",
+            fg="white",
+            selectmode=tk.SINGLE,
+            height=6,
+            yscrollcommand=scrollbar.set,
+            font=("Segoe UI", 10)
+        )
+        self.listbox.pack(fill="both", expand=True)
+        scrollbar.config(command=self.listbox.yview)
+        
+        # Reorder buttons frame
+        reorder_frame = tk.Frame(main_frame, bg="#1a1a1a")
+        reorder_frame.pack(pady=5)
+        
+        move_up_btn = ModernButton(
+            reorder_frame,
+            text="↑",
+            command=self.move_up,
+            padx=10
+        )
+        move_up_btn.pack(side=tk.LEFT, padx=5)
+        
+        move_down_btn = ModernButton(
+            reorder_frame,
+            text="↓",
+            command=self.move_down,
+            padx=10
+        )
+        move_down_btn.pack(side=tk.LEFT, padx=5)
         
         # Settings frame - modified to allow wrapping
         settings_frame = tk.Frame(main_frame, bg="#1a1a1a")
@@ -400,21 +443,81 @@ class ImageToVideoConverter:
         )
         convert_btn.pack(pady=20)
         
-    def select_images(self):
+    def select_media(self):
         files = filedialog.askopenfilenames(
-            title="Select Images",
+            title="Select Media Files",
             filetypes=[
+                ("Media files", "*.png *.jpg *.jpeg *.tiff *.bmp *.mp4 *.mov *.avi *.mkv"),
                 ("Image files", "*.png *.jpg *.jpeg *.tiff *.bmp"),
+                ("Video files", "*.mp4 *.mov *.avi *.mkv"),
                 ("All files", "*.*")
             ]
         )
         
         if files:
-            self.image_files = sorted(files, key=self.natural_sort_key)
-            self.status_text.set(f"Selected {len(self.image_files)} images")
+            self.media_files = list(files)
+            self.file_types = []
+            avg_bitrate = 0
+            video_count = 0
+            
+            for file in self.media_files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in ['.mp4', '.mov', '.avi', '.mkv']:
+                    self.file_types.append('video')
+                    # Get video bitrate using ffprobe
+                    try:
+                        result = subprocess.run([
+                            'ffprobe', 
+                            '-v', 'error',
+                            '-select_streams', 'v:0',
+                            '-show_entries', 'stream=bit_rate',
+                            '-of', 'default=noprint_wrappers=1:nokey=1',
+                            file
+                        ], capture_output=True, text=True)
+                        if result.stdout.strip():
+                            bitrate = int(result.stdout.strip()) // 1000  # Convert to kbps
+                            avg_bitrate += bitrate
+                            video_count += 1
+                    except:
+                        pass
+                else:
+                    self.file_types.append('image')
+            
+            # Update bitrate if videos were found
+            if video_count > 0:
+                self.bitrate.set(str(avg_bitrate // video_count))
+            
+            self.update_listbox()
+            self.status_text.set(f"Selected {len(self.media_files)} files")
         
-    def natural_sort_key(self, text):
-        return [int(c) if c.isdigit() else c.lower() for c in re.split('([0-9]+)', text)]
+    def update_listbox(self):
+        self.listbox.delete(0, tk.END)
+        for i, file in enumerate(self.media_files):
+            filename = os.path.basename(file)
+            file_type = self.file_types[i]
+            self.listbox.insert(tk.END, f"[{file_type.upper()}] {filename}")
+        
+    def move_up(self):
+        selection = self.listbox.curselection()
+        if not selection or selection[0] == 0:
+            return
+        
+        idx = selection[0]
+        self.media_files[idx], self.media_files[idx-1] = self.media_files[idx-1], self.media_files[idx]
+        self.file_types[idx], self.file_types[idx-1] = self.file_types[idx-1], self.file_types[idx]
+        self.update_listbox()
+        self.listbox.selection_set(idx-1)
+
+    def move_down(self):
+        selection = self.listbox.curselection()
+        if not selection or selection[0] == len(self.media_files) - 1:
+            return
+        
+        idx = selection[0]
+        self.media_files[idx], self.media_files[idx+1] = self.media_files[idx+1], self.media_files[idx]
+        self.file_types[idx], self.file_types[idx+1] = self.file_types[idx+1], self.file_types[idx]
+        self.update_listbox()
+        self.listbox.selection_set(idx+1)
         
     def read_output(self, process, output_queue):
         """Read the process output in a separate thread"""
@@ -501,8 +604,8 @@ class ImageToVideoConverter:
             return None
 
     def convert_to_video(self):
-        if not self.image_files:
-            messagebox.showerror("Error", "Please select images first!")
+        if not self.media_files:
+            messagebox.showerror("Error", "Please select media files first!")
             return
             
         try:
@@ -514,7 +617,7 @@ class ImageToVideoConverter:
             return
             
         # Calculate duration
-        duration_seconds = len(self.image_files) / fps
+        duration_seconds = len(self.media_files) / fps
 
         # Calculate target bitrate if target size is set
         target_bitrate = self.calculate_target_bitrate(duration_seconds)
@@ -535,7 +638,7 @@ class ImageToVideoConverter:
         # Get save location
         save_path = filedialog.asksaveasfilename(
             defaultextension=".mp4",
-            initialdir=str(Path(self.image_files[0]).parent.parent),
+            initialdir=str(Path(self.media_files[0]).parent.parent),
             title="Save Video As",
             filetypes=[("MP4 files", "*.mp4")]
         )
@@ -561,7 +664,7 @@ class ImageToVideoConverter:
                 
                 # Create temporary file list
                 with open(temp_list_path, "w", encoding='utf-8') as f:
-                    for image in self.image_files:
+                    for image in self.media_files:
                         f.write(f"file '{image}'\n")
                 
                 # Store temp file path in progress window
@@ -645,7 +748,7 @@ class ImageToVideoConverter:
                 output_thread.start()
                 
                 # Start progress monitoring
-                total_frames = len(self.image_files)
+                total_frames = len(self.media_files)
                 self.root.after(100, lambda: self.process_ffmpeg_output(
                     progress_window, output_queue, total_frames
                 ))
@@ -670,12 +773,16 @@ class ImageToVideoConverter:
                 self.root.after(0, show_error)
             
             finally:
-                # Clean up temp file
+                # Clean up temp files
                 try:
                     if os.path.exists(temp_list_path):
                         os.remove(temp_list_path)
+                    for i in range(len(self.media_files)):
+                        temp_path = f"temp_video_{i}.mp4"
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
                 except Exception as e:
-                    print(f"Error cleaning up temp file: {e}")
+                    print(f"Error cleaning up temp files: {e}")
                 
                 # Close progress window
                 def cleanup():
